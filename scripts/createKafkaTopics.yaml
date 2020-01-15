@@ -1,0 +1,119 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-kafka-topics
+spec:
+  template:
+    metadata:
+      name: create-kafka-topics
+    spec:
+      containers:
+      - name: bitnami-kafka
+        image: bitnami/kafka:2.4.0
+        imagePullPolicy: Always
+        command:
+        - /bin/bash
+        - -c
+        - |
+              echo "-----------------------------------------------------------------"
+              echo "-- Creating Kafka Topics                                       --"
+              echo "-----------------------------------------------------------------"
+              echo
+
+              KAFKA_CONFIG_FILE="/tmp/kafka-endpoint.config"
+              cat <<EOT >> ${KAFKA_CONFIG_FILE}
+              sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="token" password="${KAFKA_APIKEY}";
+              security.protocol=SASL_SSL
+              sasl.mechanism=PLAIN
+              ssl.protocol=TLSv1.2
+              ssl.enabled.protocols=TLSv1.2
+              ssl.endpoint.identification.algorithm=HTTPS
+              EOT
+
+              TOPICS=(
+                allocated-orders
+                bluewaterContainer
+                bluewaterProblem
+                bluewaterShip
+                containers
+                errors
+                orderCommands
+                orders
+                reeferTelemetries
+                rejected-orders
+              )
+
+              cd /opt/bitnami/kafka/bin
+
+              for TOPIC in "${TOPICS[@]}"
+              do
+
+                NEW_TOPIC_NAME="${TOPIC}"
+                if [[ -n "${TOPIC_PREFIX}" ]]; then
+                  NEW_TOPIC_NAME="${TOPIC_PREFIX}-${TOPIC}"
+                fi
+
+                echo $TOPIC
+                if [[ "${DELETE_EXISTING_TOPICS}" == "true" ]]; then
+                  echo "Deleting ${TOPIC_PREFIX}-${TOPIC} first..."
+                  ./kafka-topics.sh --bootstrap-server $KAFKA_BROKERS --command-config ${KAFKA_CONFIG_FILE} \
+                    --delete --topic "${NEW_TOPIC_NAME}"
+                fi
+
+                echo "Creating ${TOPIC_PREFIX}-${TOPIC}..."
+                ./kafka-topics.sh --bootstrap-server $KAFKA_BROKERS --command-config ${KAFKA_CONFIG_FILE} \
+                  --create --replication-factor 3 --partitions 1 --config retention.ms=${RETENTION_MS} \
+                  --topic "${NEW_TOPIC_NAME}"
+              done
+
+              echo "---------"
+              echo "-- END --"
+              echo "---------"
+        env:
+        # Available from the 'Service Credentials' tab on IBM Cloud.
+        # Following https://ibm-cloud-architecture.github.io/refarch-kc/deployments/backing-services/#using-postgresql-hosted-on-ibm-cloud,
+        # this will be in the required format of 'jdbc:postgresql://<hostname>:<port>/<database-name>?...'
+        # oc create secret generic postgresql-url --from-literal=binding='jdbc:postgresql://69ea8ac7...appdomain.cloud:31137/ibmclouddb?...'
+        - name: KAFKA_BROKERS
+          valueFrom:
+            configMapKeyRef:
+              name: "kafka-brokers"
+              key: brokers
+        # Available from the 'Service Credentials' tab on IBM Cloud.
+        # oc create secret generic postgresql-user --from-literal=binding='ibm_cloud_...'
+        - name: KAFKA_APIKEY
+          valueFrom:
+            secretKeyRef:
+              name: "eventstreams-apikey"
+              key: binding
+        # TODO Documentation
+        - name: DELETE_EXISTING_TOPICS
+          value: "true"
+        # TODO Documentation
+        - name: TOPIC_PREFIX
+          value: "eda-test"
+        # TODO Documentation
+        - name: RETENTION_MS
+          value: "86400000"
+        # TODO Test implementation against OCP EventStreams
+        # Location where the Postgresql SSL certificate is stored on the running container.
+        #- name: PGSSLROOTCERT
+        #  value: "/tmp/certs/pg-ssl.pem"
+        # Mounting the Postgresql SSL certificate from the defined Secret to the container's filesystem
+        #volumeMounts:
+        #- mountPath: "/tmp/certs"
+        #  name: postgresql-ca-pem
+      #volumes:
+         # You MUST create this secret with the Postgresql CA PEM certificate in advance. Examples below:
+         # First, download the pem certificate using the IBM Cloud DB CLI.
+         # 1.  ibmcloud cdb deployment-cacert $IC_POSTGRES_SERV > postgresql.crt
+         # 2.  oc create secret generic postgresql-ca-pem --from-literal=binding="$(cat postgresql.crt)"
+      #   - name: postgresql-ca-pem
+      #     secret:
+      #       secretName: "postgresql-ca-pem"
+      #       items:
+      #       - key: binding
+      #         path: pg-ssl.pem
+      #       optional: true
+      restartPolicy: Never
+  backoffLimit: 0
