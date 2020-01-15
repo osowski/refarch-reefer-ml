@@ -20,16 +20,6 @@ spec:
               echo "-----------------------------------------------------------------"
               echo
 
-              KAFKA_CONFIG_FILE="/tmp/kafka-endpoint.config"
-              cat <<EOT >> ${KAFKA_CONFIG_FILE}
-              sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="token" password="${KAFKA_APIKEY}";
-              security.protocol=SASL_SSL
-              sasl.mechanism=PLAIN
-              ssl.protocol=TLSv1.2
-              ssl.enabled.protocols=TLSv1.2
-              ssl.endpoint.identification.algorithm=HTTPS
-              EOT
-
               TOPICS=(
                 allocated-orders
                 bluewaterContainer
@@ -43,6 +33,21 @@ spec:
                 rejected-orders
               )
 
+              KAFKA_CONFIG_FILE="/tmp/kafka-endpoint.config"
+              cat <<EOT >> ${KAFKA_CONFIG_FILE}
+              sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="token" password="${KAFKA_APIKEY}";
+              security.protocol=SASL_SSL
+              sasl.mechanism=PLAIN
+              ssl.protocol=TLSv1.2
+              ssl.enabled.protocols=TLSv1.2
+              ssl.endpoint.identification.algorithm=HTTPS
+              EOT
+
+              if [[ -f "${TRUSTSTORE_PATH}" ]]; then
+                echo "ssl.truststore.location=${TRUSTSTORE_PATH}" >> ${KAFKA_CONFIG_FILE}
+                echo "ssl.truststore.password=${TRUSTSTORE_PWD}" >> ${KAFKA_CONFIG_FILE}
+              fi
+
               cd /opt/bitnami/kafka/bin
 
               for TOPIC in "${TOPICS[@]}"
@@ -55,12 +60,12 @@ spec:
 
                 echo $TOPIC
                 if [[ "${DELETE_EXISTING_TOPICS}" == "true" ]]; then
-                  echo "Deleting ${TOPIC_PREFIX}-${TOPIC} first..."
+                  echo "Deleting ${NEW_TOPIC_NAME} first..."
                   ./kafka-topics.sh --bootstrap-server $KAFKA_BROKERS --command-config ${KAFKA_CONFIG_FILE} \
                     --delete --topic "${NEW_TOPIC_NAME}"
                 fi
 
-                echo "Creating ${TOPIC_PREFIX}-${TOPIC}..."
+                echo "Creating ${NEW_TOPIC_NAME}..."
                 ./kafka-topics.sh --bootstrap-server $KAFKA_BROKERS --command-config ${KAFKA_CONFIG_FILE} \
                   --create --replication-factor 3 --partitions 1 --config retention.ms=${RETENTION_MS} \
                   --topic "${NEW_TOPIC_NAME}"
@@ -70,50 +75,61 @@ spec:
               echo "-- END --"
               echo "---------"
         env:
-        # Available from the 'Service Credentials' tab on IBM Cloud.
-        # Following https://ibm-cloud-architecture.github.io/refarch-kc/deployments/backing-services/#using-postgresql-hosted-on-ibm-cloud,
-        # this will be in the required format of 'jdbc:postgresql://<hostname>:<port>/<database-name>?...'
-        # oc create secret generic postgresql-url --from-literal=binding='jdbc:postgresql://69ea8ac7...appdomain.cloud:31137/ibmclouddb?...'
+        # Available from IBM Event Streams console under the "Connect to this service" button.
+        # For IBM Event Streams hosted on IBM Cloud, follow https://ibm-cloud-architecture.github.io/refarch-kc/deployments/backing-services/#event-streams-kafka-brokers
+        # For IBM Event Streams hosted on-premises via OpenShift, follow https://ibm-cloud-architecture.github.io/refarch-kc/deployments/backing-services/#event-streams-kafka-brokers_1
+        # kubectl create configmap kafka-brokers --from-literal=brokers='<replace with comma-separated list of brokers>'
         - name: KAFKA_BROKERS
           valueFrom:
             configMapKeyRef:
               name: "kafka-brokers"
               key: brokers
-        # Available from the 'Service Credentials' tab on IBM Cloud.
-        # oc create secret generic postgresql-user --from-literal=binding='ibm_cloud_...'
+        # Available from IBM Event Streams console under the "Connect to this service" button.
+        # For IBM Event Streams hosted on IBM Cloud, follow https://ibm-cloud-architecture.github.io/refarch-kc/deployments/backing-services/#event-streams-api-key
+        # For IBM Event Streams hosted on-premises via OpenShift, follow https://ibm-cloud-architecture.github.io/refarch-kc/deployments/backing-services/#event-streams-api-key_1
+        # kubectl create secret generic eventstreams-apikey --from-literal=binding='<replace with api key>'
         - name: KAFKA_APIKEY
           valueFrom:
             secretKeyRef:
               name: "eventstreams-apikey"
               key: binding
-        # TODO Documentation
+        # If you would prefer to the delete existing topics with the same name before attempting to create new topics,
+        # set this value to 'true'. This is useful in clearing out old data when recreating an environment.
         - name: DELETE_EXISTING_TOPICS
-          value: "true"
-        # TODO Documentation
+          value: "false"
+        # Prefix to use in the topic names. If set to a non-empty string, the format of the topic name will be "${TOPIC_PREFIX}-${TOPIC_NAME}"
         - name: TOPIC_PREFIX
-          value: "eda-test"
-        # TODO Documentation
+          value: "username"
+        # Retention time of the topic in milliseconds. Default value of 86400000 is equal to one day.
         - name: RETENTION_MS
           value: "86400000"
-        # TODO Test implementation against OCP EventStreams
-        # Location where the Postgresql SSL certificate is stored on the running container.
-        #- name: PGSSLROOTCERT
-        #  value: "/tmp/certs/pg-ssl.pem"
-        # Mounting the Postgresql SSL certificate from the defined Secret to the container's filesystem
-        #volumeMounts:
-        #- mountPath: "/tmp/certs"
-        #  name: postgresql-ca-pem
-      #volumes:
-         # You MUST create this secret with the Postgresql CA PEM certificate in advance. Examples below:
-         # First, download the pem certificate using the IBM Cloud DB CLI.
-         # 1.  ibmcloud cdb deployment-cacert $IC_POSTGRES_SERV > postgresql.crt
-         # 2.  oc create secret generic postgresql-ca-pem --from-literal=binding="$(cat postgresql.crt)"
-      #   - name: postgresql-ca-pem
-      #     secret:
-      #       secretName: "postgresql-ca-pem"
-      #       items:
-      #       - key: binding
-      #         path: pg-ssl.pem
-      #       optional: true
+        # Available from IBM Event Streams console under the "Connect to this service" button.
+        # For IBM Event Streams hosted on IBM Cloud, this is not currently required.
+        # For IBM Event Streams hosted on-premises via OpenShift, this is 'password' by default.
+        - name: TRUSTSTORE_PWD
+          value: "password"
+        # Path inside the running container which the SSL certificate will be mounted to when required. This does not normally need to be modified.
+        - name: TRUSTSTORE_PATH
+          value: "/tmp/eventstreams-ssl/es-cert.jks"
+        volumeMounts:
+          - mountPath: "/tmp/eventstreams-ssl"
+            name: eventstreams-truststore
+            readOnly: true
+      volumes:
+        - name: eventstreams-truststore
+          secret:
+            # For IBM Event Streams hosted on IBM Cloud, this is not currently required.
+            # For IBM Event Streams hosted on-premises via OpenShift, follow https://ibm-cloud-architecture.github.io/refarch-kc/deployments/backing-services/#event-streams-certificates
+            secretName: "eventstreams-truststore-jks"
+            items:
+            # When creating the required secret from the downloaded truststore file directly (ie '--from-file'),
+            # the internal key of the Kubernetes Secret will be the filename of the downloaded file. If the downloaded
+            # filename on your system is not 'es-cert.jks' for any reason, change the name of the KEY (not the PATH) parameter
+            # below to match name of the file downloaded to your system.
+            # The correct value can be verified by using kubectl and jq via the following command:
+            # kubectl get secret eventstreams-truststore-jks -o json | jq -r ".data | keys[0]"
+            - key: es-cert.jks
+              path: es-cert.jks
+            optional: true
       restartPolicy: Never
   backoffLimit: 0
