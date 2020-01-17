@@ -44,6 +44,8 @@ spec:
   - name: deploy-image
     image: kabanero/kabanero-utils:0.3.0
     command: ['/bin/sh']
+    # This task requires explicit API authorization when running on OpenShift. Details can be found via
+    # https://appsody.dev/docs/using-appsody/building-and-deploying#rbac-considerations-for-the-use-of-appsody-deploy-and-appsody-operator-commands
     args: ['-c', 'find /workspace/$gitsource/${CONTEXT} -name ${YAMLFILE} -type f|xargs kubectl apply -f']
     env:
     - name: gitsource
